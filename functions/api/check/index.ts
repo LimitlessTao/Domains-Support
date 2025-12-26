@@ -80,34 +80,27 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
         const offlineDomains: Domain[] = []
         const expiringDomains: (Domain & { remainingDays: number })[] = []
 
-        // 批量检查域名状态
-        const BATCH_SIZE = 20
-        for (let i = 0; i < domains.length; i += BATCH_SIZE) {
-            const batch = domains.slice(i, i + BATCH_SIZE)
-            console.log(`正在处理第 ${i + 1} 到 ${Math.min(i + BATCH_SIZE, domains.length)} 个域名`)
+        for (const domain of domains) {
+            const remainingDays = calculateRemainingDays(domain.expiry_date)
+            console.log(`检查域名 ${domain.domain}: 过期时间 ${domain.expiry_date}, 剩余天数 ${remainingDays}`)
 
-            await Promise.all(batch.map(async (domain) => {
-                const remainingDays = calculateRemainingDays(domain.expiry_date)
-                console.log(`检查域名 ${domain.domain}: 过期时间 ${domain.expiry_date}, 剩余天数 ${remainingDays}`)
+            // 检查网站连通性
+            const isOnline = await checkDomainStatus(domain.domain)
 
-                // 检查网站连通性
-                const isOnline = await checkDomainStatus(domain.domain)
+            // 更新域名状态
+            const newStatus = isOnline ? '在线' : '离线'
+            await context.env.DB.prepare(
+                'UPDATE domains SET status = ? WHERE domain = ?'
+            ).bind(newStatus, domain.domain).run()
 
-                // 更新域名状态
-                const newStatus = isOnline ? '在线' : '离线'
-                await context.env.DB.prepare(
-                    'UPDATE domains SET status = ? WHERE domain = ?'
-                ).bind(newStatus, domain.domain).run()
+            if (newStatus === '离线' && domain.st_tgsend === 1) {
+                offlineDomains.push(domain)
+            }
 
-                if (newStatus === '离线' && domain.st_tgsend === 1) {
-                    offlineDomains.push(domain)
-                }
-
-                // 检查域名是否即将过期
-                if (remainingDays <= config.days && domain.tgsend === 1) {
-                    expiringDomains.push({ ...domain, remainingDays })
-                }
-            }))
+            // 检查域名是否即将过期
+            if (remainingDays <= config.days && domain.tgsend === 1) {
+                expiringDomains.push({ ...domain, remainingDays })
+            }
         }
 
         // 统一发送离线通知
